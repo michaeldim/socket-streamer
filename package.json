@@ -10,6 +10,7 @@
   "license": "ISC",
   "dependencies": {
     "autobahn": "^17.5.2",
+    "bluebird": "^3.5.0",
     "commander": "^2.11.0",
     "redis": "^2.8.0",
     "socket.io-client": "^2.0.3"
