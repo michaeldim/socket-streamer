@@ -4,6 +4,7 @@ import autobahn from 'autobahn'
 import WebSocket from 'ws'
 import Redis from 'redis'
 import Promise from 'bluebird'
+import _ from 'lodash'
 
 Promise.promisifyAll(Redis.RedisClient.prototype)
 Promise.promisifyAll(Redis.Multi.prototype)
@@ -19,7 +20,7 @@ commander
 let redisUrl = commander.redis ? commander.redis : 'redis://localhost:6379'
 let wsUrl = commander.ws ? commander.ws : 'wss://api2.poloniex.com'
 let redisPrefix = commander.redisPrefix ? commander.redisPrefix : 'orderbook'
-let apiVersion = commander.apiVersion ? commander.apiVersion : 2 // may be 1 or 2
+let apiVersion = commander.apiVersion ? commander.apiVersion : 2 // could be 1 or 2
 
 // parameter
 const RECONNECT_INTERVAL = 60000 // 1 min
@@ -55,7 +56,7 @@ let getOrderbook = market => {
             })
 
             res.on('end', () => {
-                console.log(buffer)
+                // console.log(buffer)
                 try {
                     let json = JSON.parse(buffer)
                     resolve(json)
@@ -103,42 +104,60 @@ let refreshOrderbook = (market, orderbook) => {
         })
 }
 
-let readOrderbook = market => {
+let readOrderbook = (market, limit) => {
     // WARNING : current implementation does NOT support multiple redis clients
-
-    let askPromise = client.zrangeAsync(getOrderbookKey(market, 'asks.sset'), 0, -1)
+    // limit = -1 to get full depth
+    let askPromise = client.zrangeAsync(getOrderbookKey(market, 'asks.sset'), 0, limit)
         .then(asks => {
             if (asks === undefined || asks == null || asks.length == 0)
                 return Promise.resolve([])
 
             return client.hmgetAsync(getOrderbookKey(market, 'asks.hash'), asks)
-                .then(askPairs => {
-                    let filteredAskPairs = askPairs.filter(ask => {
-                        if (ask === undefined || ask == null)
+                .then(askQs => {
+                    let askPairs = askQs.map((q, index) => {
+                        if (q === undefined || q == null)
+                            return null
+                        else {
+                            let pair = {}
+                            pair[asks[index]] = q
+                            return pair
+                        }
+                    })
+                    .filter(curr => {
+                        if (curr == null)
                             return false
                         else
                             return true
                     })
 
-                    return Promise.resolve(filteredAskPairs)
+                    return Promise.resolve(askPairs)
                 })
         })
 
-    let bidPromise = client.zrevrangeAsync(getOrderbookKey(market, 'bids.sset'), 0, -1)
+    let bidPromise = client.zrevrangeAsync(getOrderbookKey(market, 'bids.sset'), 0, limit)
         .then(bids => {
             if (bids === undefined || bids == null || bids.length == 0)
                 return Promise.resolve([])
             
             return client.hmgetAsync(getOrderbookKey(market, 'bids.hash'), bids)
-                .then(bidPairs => {
-                    let filteredBidPairs = bidPairs.filter(bid => {
-                        if (bid === undefined || bid == null)
+                .then(bidQs => {
+                    let bidPairs = bidQs.map((q, index) => {
+                        if (q === undefined || q == null)
+                            return null
+                        else {
+                            let pair = {}
+                            pair[bids[index]] = q
+                            return pair
+                        }
+                    })
+                    .filter(curr => {
+                        if (curr == null)
                             return false
                         else
                             return true
                     })
 
-                    return Promise.resolve(filteredBidPairs)
+                    return Promise.resolve(bidPairs)
                 })
         })
 
@@ -153,13 +172,57 @@ let readOrderbook = market => {
             return client.getAsync(getOrderbookKey(market, 'frozen'))
         })
         .then(frozen => {
-            context.orderbook['frozen'] = frozen
+            context.orderbook['frozen'] = parseInt(frozen)
             return client.getAsync(getOrderbookKey(market, 'seq'))
         })
         .then(seq => {
-            context.orderbook['seq'] = seq
+            context.orderbook['seq'] = parseInt(seq)
             return Promise.resolve(context.orderbook)
         })
+}
+
+let messageHandler = (market, msg) => {
+    // check orderbook seq
+    client.getAsync(getOrderbookKey(market, 'seq'))
+    .then(seq => {
+        if (seq !== undefined && seq != null) {
+            seq = parseInt(seq)
+            console.log('market.seq', seq, typeof(seq), 'msg.seq', msg.seq, typeof(msg.seq))
+            if (seq + 1 == msg.seq) {
+                console.log('exec msg')
+                // exec current msg
+                let commands = client.multi()
+
+                // TODO : iterate msg.ops
+                for (op in msg.ops) {
+                    commands = updateOrderbook(market, op, commands)
+                }
+
+                commands.incr(getOrderbookKey(market, 'seq'))
+
+                commands.execAsync()
+                    .then((err, replies) => {
+                        if (err) {
+                            printLog(err.errors)
+                        }
+
+                        // execute stored msg in order
+                        execStoredMsgs(market)
+                    })
+            }
+            else if (seq + 1 < msg.seq) {
+                // store msg in order
+                storeMsg(market, msg)
+            }
+        }
+        else {
+            // orderbook not ready yet, just store msg in order
+            storeMsg(market, msg)
+        }
+    })
+    .catch(err => {
+        printLog(err)
+    })
 }
 
 let updateOrderbook = (market, op, commands) => {
@@ -238,53 +301,63 @@ let execStoredMsgs = market => {
         })
 }
 
+let orderbookWrapper = (rawOp, seq) => {
+    let orderbook = null
+
+    try {
+        orderbook = rawOp[1].orderBook
+        let asks = _.toPairs(orderbook[0])
+        let bids = _.toPairs(orderbook[1])
+        orderbook = {asks: asks, bids: bids, isFrozen: 0, seq: parseInt(seq)}
+    }
+    catch(err) {
+        printLog(err)
+    }
+    finally {
+        return orderbook
+    }
+}
+
+let opWrapper = (rawOp) => {
+    let arg = null
+
+    try {
+        arg = {type: 'orderBookModify'}
+        
+        if (rawOp[3] == '0.00000000') {
+            arg.type = 'orderBookRemove'
+            arg['data'] = {rate: rawOp[2]}
+        }
+        else {
+            arg['data'] = {rate: rawOp[2], amount: rawOp[3]}
+        }
+    
+        if (rawOp[1] == 0)
+            arg.data['type'] = 'ask'
+        else
+            arg.data['type'] = 'bid'
+    }
+    catch(err) {
+        printLog(err)
+    }
+    finally {
+        return arg
+    }
+}
+
 markets.map(market => {
     if (apiVersion == 1) {
         // WAMP protocol
         let socket = new autobahn.Connection({url: wsUrl, realm: 'realm1'})
         
         let marketHandler = (args, kwargs) => {
+            // [{data: {rate: '0.00300888', type: 'bid', amount: '3.32349029'},type: 'orderBookModify'}]
+            // [{data: {rate: '0.00311164', type: 'ask' },type: 'orderBookRemove'}]
+
             // console.log('args', args, 'kwargs', kwargs)
     
             let msg = {ops: args, seq: kwargs['seq']}
-    
-            // check orderbook seq
-            client.getAsync(getOrderbookKey(market, 'seq'))
-                .then(seq => {
-                    if (seq !== undefined && seq != null) {
-                        if (seq + 1 == msg.seq) {
-                            // exec current msg
-                            let commands = client.multi()
-    
-                            for (op in msg.ops) {
-                                commands = updateOrderbook(market, op, commands)
-                            }
-    
-                            commands.incr(getOrderbookKey(market, 'seq'))
-    
-                            commands.execAsync()
-                                .then((err, replies) => {
-                                    if (err) {
-                                        printLog(err.errors)
-                                    }
-    
-                                    // execute stored msg in order
-                                    execStoredMsgs(market)
-                                })
-                        }
-                        else if (seq + 1 < msg.seq) {
-                            // store msg in order
-                            storeMsg(market, msg)
-                        }
-                    }
-                    else {
-                        // orderbook not ready yet, just store msg in order
-                        storeMsg(market, msg)
-                    }
-                })
-                .catch(err => {
-                    printLog(err)
-                })
+            messageHandler(market, msg)
         }
         
         socket.onopen = connection => {
@@ -310,7 +383,6 @@ markets.map(market => {
         // TODO : plain websocket
         let ws = new WebSocket(wsUrl)
 
-        let marketHandler = (args, kwargs)
         ws.on('open', () => {
             printLog('WebSocket connected to ' + wsUrl)
             ws.send(JSON.stringify({command: 'subscribe', channel: market}))
@@ -318,30 +390,90 @@ markets.map(market => {
         })
 
         ws.on('message', message => {
-            let seq = message[1]
-            for (op in message[3]) {
-                switch (op[0]) {
-                    case 'i':
-                    
-                    break
-                    
-                    case 'o':
-                    break
+            // [178,91878377,[["o",1,"0.05013632","0.00000000"],["o",1,"0.05011473","178.09400000"]]]
 
-                    case 't':
-                    break
+            try {
+                message = JSON.parse(message)
 
+                let opCode = message[0]
+                let seq = message[1]
+                let rawOps = message[2]
+    
+                switch(opCode) {
+                    case 1001:
+                    // trollbox event
+                    break
+    
+                    case 1002:
+                    // tick event
+                    break
+    
+                    case 1010:
+                    // heartbeat
+                    break
+    
                     default:
-                    printLog('Unknown message type')
-                    break
+                    if (opCode > 0 && opCode < 1000) {
+                        // orderbook event
+
+                        let ops = rawOps.map(rawOp => {
+                            switch (rawOp[0]) {
+                                case 'i':
+                                // init market orderbook
+                                try {
+                                    let orderbook = orderbookWrapper(rawOp, seq)
+                                    if (orderbook != null)
+                                        refreshOrderbook(market, orderbook)
+                                }
+                                catch(err) {
+                                    printLog(err)
+                                }
+                                finally {
+                                    return null
+                                }
+                                break
+                                
+                                case 'o':
+                                // convert to api version1 op
+                                let arg = opWrapper(rawOp)
+                                if (arg != null)
+                                    return arg
+                                break
+            
+                                case 't':
+                                // trade - not interested for now
+                                return null
+                                break
+            
+                                default:
+                                printLog('Unknown message type')
+                                return null
+                                break
+                            }
+                        })
+                        .filter(curr => {
+                            if (curr == null)
+                                return false
+                            else
+                                return true
+                        })
+            
+                        if (ops.length !== 0) {
+                            let msg = {ops: ops, seq: seq}
+                            messageHandler(market, msg)
+                        }
+                    } // if 0 < opCode < 1000
+                    break // default
                 }
             }
-            let msg = convertWsMessage(message)
-
-        })
+            catch(err) {
+                printLog(err)
+                return
+            }
+        }) // ws on message
 
         ws.on('disconnect', () => {
-            
+            printLog('Websocket disconnected from ' + wsUrl)
         })
     }
     else {
@@ -350,12 +482,11 @@ markets.map(market => {
 })
 
 setInterval(() => {
-    /*
-    readOrderbook(markets[0])
+    readOrderbook(markets[0], 10)
         .then(orderbook => {
             console.log(JSON.stringify(orderbook))
         })
-    */
+    /*
     getOrderbook(markets[0])
         .then(orderbooks => {
             // console.log(orderbooks)
@@ -363,4 +494,5 @@ setInterval(() => {
         .catch(err => {
             console.log(err)
         })
+    */
 }, 10000)
