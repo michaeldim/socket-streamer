@@ -25,10 +25,13 @@ let apiVersion = commander.apiVersion ? commander.apiVersion : 2 // could be 1 o
 // parameter
 const RECONNECT_INTERVAL = 60000 // 1 min
 const ERROR_RECONNECT_INTERVAL = 600000 // 10 min
-const OP_QUEUE_LIMIT = 16
+const OP_QUEUE_LIMIT = 1024
+const TICK_DEPTH = 128
 
 const markets = [
-    'BTC_ZEC'
+    'BTC_ZEC',
+    'BTC_ETH',
+    'ETH_ZEC'
 ]
 
 // const socket = new autobahn.Connection({url: wampUrl, realm: 'realm1'})
@@ -39,6 +42,7 @@ let watchDog = null
 let printLog = msg => {
     let now = new Date()
     console.log(now.toLocaleString(), msg)
+    // console.trace()
 }
 
 let getOrderbookKey = (market, name) => {
@@ -97,10 +101,8 @@ let refreshOrderbook = (market, orderbook) => {
     })
 
     return commands.execAsync()
-        .then((err, replies) => {
-            if (err) {
-                printLog(err.errors)
-            }
+        .catch(err => {
+            printLog(err)
         })
 }
 
@@ -114,12 +116,13 @@ let readOrderbook = (market, limit) => {
 
             return client.hmgetAsync(getOrderbookKey(market, 'asks.hash'), asks)
                 .then(askQs => {
+                    /*
                     let askPairs = askQs.map((q, index) => {
                         if (q === undefined || q == null)
                             return null
                         else {
-                            let pair = {}
-                            pair[asks[index]] = q
+                            let pair = [asks[index], q]
+                            // pair[asks[index]] = q
                             return pair
                         }
                     })
@@ -129,6 +132,9 @@ let readOrderbook = (market, limit) => {
                         else
                             return true
                     })
+                    */
+
+                    let askPairs = [asks, askQs]
 
                     return Promise.resolve(askPairs)
                 })
@@ -141,12 +147,13 @@ let readOrderbook = (market, limit) => {
             
             return client.hmgetAsync(getOrderbookKey(market, 'bids.hash'), bids)
                 .then(bidQs => {
+                    /*
                     let bidPairs = bidQs.map((q, index) => {
                         if (q === undefined || q == null)
                             return null
                         else {
-                            let pair = {}
-                            pair[bids[index]] = q
+                            let pair = [bids[index], q]
+                            // pair[bids[index]] = q
                             return pair
                         }
                     })
@@ -156,6 +163,9 @@ let readOrderbook = (market, limit) => {
                         else
                             return true
                     })
+                    */
+
+                    let bidPairs = [bids, bidQs]
 
                     return Promise.resolve(bidPairs)
                 })
@@ -187,32 +197,39 @@ let messageHandler = (market, msg) => {
     .then(seq => {
         if (seq !== undefined && seq != null) {
             seq = parseInt(seq)
-            console.log('market.seq', seq, typeof(seq), 'msg.seq', msg.seq, typeof(msg.seq))
             if (seq + 1 == msg.seq) {
-                console.log('exec msg')
+                // console.log('exec', 'market.seq', seq, 'msg.seq', msg.seq)
+
                 // exec current msg
                 let commands = client.multi()
 
-                // TODO : iterate msg.ops
-                for (op in msg.ops) {
-                    commands = updateOrderbook(market, op, commands)
-                }
+                msg.ops.map(op => {
+                    updateOrderbook(market, op, commands)
+                })
 
                 commands.incr(getOrderbookKey(market, 'seq'))
 
                 commands.execAsync()
-                    .then((err, replies) => {
-                        if (err) {
-                            printLog(err.errors)
-                        }
+                    .then(replies => {
+                        sendTick(market)
 
                         // execute stored msg in order
                         execStoredMsgs(market)
+                    })
+                    .catch(err => {
+                        printLog(err)
                     })
             }
             else if (seq + 1 < msg.seq) {
                 // store msg in order
                 storeMsg(market, msg)
+                    .then(() => {
+                        execStoredMsgs(market)
+                    })
+            }
+            else {
+                // expired msg, drop and exec stored msg in order
+                execStoredMsgs(market)
             }
         }
         else {
@@ -246,58 +263,79 @@ let updateOrderbook = (market, op, commands) => {
 }
 
 let storeMsg = (market, msg) => {
-    client.zaddAsync(getOrderbookKey(market, 'ops'), msg.seq, JSON.stringify(msg))
+    // console.log('storeMsg', 'msg.seq', msg.seq)
+
+    return client.zaddAsync(getOrderbookKey(market, 'ops'), msg.seq, JSON.stringify(msg))
     .then(() => {
         return client.zcardAsync(getOrderbookKey(market, 'ops'))
     })
     .then(count => {
+        count = parseInt(count)
         if (count > OP_QUEUE_LIMIT) {
             // consider we have lost op(s), discard op queue and refresh orderbook
             client.del(getOrderbookKey(market, 'ops'))
-            refreshOrderbook(market)
+
+            // TODO : refresh with restful API
+            getOrderbook(market)
+                .then(orderbook => {
+                    refreshOrderbook(market, orderbook)
+                })
         }
     })
 }
 
 let execStoredMsgs = market => {
+    let context = {}
+
     client.getAsync(getOrderbookKey(market, 'seq'))
         .then(seq => {
-            return client.zrangeAsync(getOrderbookKey(market, 'ops'), 0, -1).bind({seq: seq})
+            context['seq'] = parseInt(seq)
+            return client.zrangeAsync(getOrderbookKey(market, 'ops'), 0, -1)
         })
         .then(storedMsgs => {
-            storedMsgs = JSON.parse(storedMsgs)
+            storedMsgs = storedMsgs.map(JSON.parse)
 
             if (storedMsgs != null && storedMsgs.length != 0) {
                 let commands = client.multi()
                 let commandFlag = false
 
-                for (storedMsg in storedMsgs) {
-                    if (this.seq + 1 == storedMsg.seq) {
+                storedMsgs.map(storedMsg => {
+                    if (context.seq + 1 == storedMsg.seq) {
+                        // console.log('execStoredMsgs:exec', 'market.seq', context.seq, 'msg.seq', storedMsg.seq)
+
+                        // exec next msg
                         commandFlag = true
 
-                        for (op in storeMsg.ops)
-                            commands = updateOrderbook(market, op, commands)
+                        storedMsg.ops.map(op => {
+                            updateOrderbook(market, op, commands)
+                        })
 
                         commands.zrem(getOrderbookKey(market, 'ops'), JSON.stringify(storedMsg))
                         commands.incr(getOrderbookKey(market, 'seq'))
 
-                        this.seq++
+                        context.seq++
+
+                        sendTick(market)
                     }
-                    else if (this.seq + 1 > storedMsg.seq) {
+                    else if (context.seq + 1 > storedMsg.seq) {
+                        // console.log('execStoredMsgs:remove', 'market.seq', context.seq, 'msg.seq', storedMsg.seq)
                         // remove outdated msg
                         commands.zrem(getOrderbookKey(market, 'ops'), JSON.stringify(storedMsg))
                     }
-                    else if (this.seq + 1 < storeMsg.seq) {
-                        // too far away, exit and wait
-                        break
-                    }
-                }
+                })
 
                 if (commandFlag)
                     commands.exec()
                 else
                     commands.discard()
             }
+        })
+}
+
+let sendTick = market => {
+    readOrderbook(market, TICK_DEPTH)
+        .then(orderbook => {
+            client.publish(market, JSON.stringify(orderbook))
         })
 }
 
@@ -482,17 +520,10 @@ markets.map(market => {
 })
 
 setInterval(() => {
-    readOrderbook(markets[0], 10)
-        .then(orderbook => {
-            console.log(JSON.stringify(orderbook))
-        })
-    /*
-    getOrderbook(markets[0])
-        .then(orderbooks => {
-            // console.log(orderbooks)
-        })
-        .catch(err => {
-            console.log(err)
-        })
-    */
+    markets.map(market => {
+        readOrderbook(market, 10)
+            .then(orderbook => {
+                console.log(JSON.stringify(orderbook))
+            })
+    })
 }, 10000)
