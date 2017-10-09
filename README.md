@@ -6,6 +6,11 @@ Subscribe to [Market Name] channel from Redis to get real-time orderbook snapsho
 gulp build
 node lib/p-streamer.js
 ```
+### Start with PM2:
+```
+gulp build
+pm2 start ecosystem.config.js
+```
 ### Options:
 ```
     -V, --version               output the version number
