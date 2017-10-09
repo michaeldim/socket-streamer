@@ -11,10 +11,10 @@ Promise.promisifyAll(Redis.Multi.prototype)
 
 commander
     .version('1.0.0')
-    .option('-r, --redis <redisUrl>', 'Redis URL')
-    .option('-w, --ws <wsUrl>', 'WebSocket URL')
-    .option('-p, --prefix <redisPrefix>', 'Redis Prefix')
-    .option('-v, --version <apiVersion>', 'Poloniex API Version')
+    .option('-r, --redis <redisUrl>', 'Redis URL [redis://localhost:6379]')
+    .option('-w, --ws <wsUrl>', 'WebSocket URL [wss://api2.poloniex.com]')
+    .option('-p, --prefix <redisPrefix>', 'Redis Prefix [orderbook]')
+    .option('-v, --version <apiVersion>', 'Poloniex API Version [2]')
     .parse(process.argv)
 
 let redisUrl = commander.redis ? commander.redis : 'redis://localhost:6379'
