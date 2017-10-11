@@ -14,12 +14,14 @@ commander
     .option('-r, --redis <redisUrl>', 'Redis URL [redis://localhost:6379]')
     .option('-w, --ws <wsUrl>', 'WebSocket URL [wss://api2.poloniex.com]')
     .option('-p, --prefix <redisPrefix>', 'Redis Prefix [orderbook]')
+    .option('-t, --trade <tradeChannel>', 'Trade info Redis channel [poloniex_trade]')
     .option('-v, --version <apiVersion>', 'Poloniex API Version [2]')
     .parse(process.argv)
 
 let redisUrl = commander.redis ? commander.redis : 'redis://localhost:6379'
 let wsUrl = commander.ws ? commander.ws : 'wss://api2.poloniex.com'
 let redisPrefix = commander.redisPrefix ? commander.redisPrefix : 'orderbook'
+let tradeChannel = commander.tradeChannel ? commander.tradeChannel : 'poloniex_trade'
 let apiVersion = commander.apiVersion ? commander.apiVersion : 2 // could be 1 or 2
 
 // parameter
@@ -479,7 +481,17 @@ markets.map(market => {
                                 break
             
                                 case 't':
-                                // trade - not interested for now
+                                // trade
+                                let trade = {
+                                    tradeID: rawOp[1],
+                                    type: (rawOp[2] == 1 ? 'buy' : 'sell'),
+                                    rate: rawOp[3],
+                                    amount: rawOp[4],
+                                    total: parseFloat(rawOp[3]) * parseFloat(rawOp[4]),
+                                    ts: rawOp[5],
+                                    market: market
+                                }
+                                client.publish(tradeChannel, JSON.stringify(trade))
                                 return null
                                 break
             
