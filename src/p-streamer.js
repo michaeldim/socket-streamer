@@ -3,6 +3,7 @@ import commander from 'commander'
 import autobahn from 'autobahn'
 import WebSocket from 'ws'
 import Redis from 'redis'
+import { MongoClient } from 'mongodb'
 import Promise from 'bluebird'
 import _ from 'lodash'
 
@@ -10,19 +11,23 @@ Promise.promisifyAll(Redis.RedisClient.prototype)
 Promise.promisifyAll(Redis.Multi.prototype)
 
 commander
-    .version('1.0.0')
+    .version('1.1.0')
     .option('-r, --redis <redisUrl>', 'Redis URL [redis://localhost:6379]')
+    .option('-m, --mongo <mongoUrl>', 'Mongo URL [mongodb://localhost:27017/streamer]')
     .option('-w, --ws <wsUrl>', 'WebSocket URL [wss://api2.poloniex.com]')
     .option('-p, --prefix <redisPrefix>', 'Redis Prefix [orderbook]')
     .option('-t, --trade <tradeChannel>', 'Trade info Redis channel [poloniex_trade]')
     .option('-v, --version <apiVersion>', 'Poloniex API Version [2]')
+    .option('-s, --snapshot <snapshotInterval>', 'Snapshot interval in ms [60000]')
     .parse(process.argv)
 
 let redisUrl = commander.redis ? commander.redis : 'redis://localhost:6379'
+let mongoUrl = commander.mongo ? commander.mongo : 'mongodb://localhost:27017/streamer'
 let wsUrl = commander.ws ? commander.ws : 'wss://api2.poloniex.com'
 let redisPrefix = commander.redisPrefix ? commander.redisPrefix : 'orderbook'
 let tradeChannel = commander.tradeChannel ? commander.tradeChannel : 'poloniex_trade'
 let apiVersion = commander.apiVersion ? commander.apiVersion : 2 // could be 1 or 2
+let snapshotInterval = commander.snapshot ? commander.snapshot : 60000
 
 // parameter
 const RECONNECT_INTERVAL = 60000 // 1 min
@@ -38,6 +43,9 @@ const markets = [
 
 // const socket = new autobahn.Connection({url: wampUrl, realm: 'realm1'})
 const client = Redis.createClient(redisUrl)
+const connection = MongoClient.connect(mongoUrl, {
+    promiseLibrary: Promise
+})
 
 let watchDog = null
 
@@ -492,6 +500,9 @@ markets.map(market => {
                                     market: market
                                 }
                                 client.publish(tradeChannel, JSON.stringify(trade))
+                                connection.then(db => {
+                                    db.collection('trade').insert(trade)
+                                })
                                 return null
                                 break
             
@@ -531,6 +542,7 @@ markets.map(market => {
     }
 })
 
+// print limited depth
 setInterval(() => {
     markets.map(market => {
         readOrderbook(market, 10)
@@ -539,3 +551,15 @@ setInterval(() => {
             })
     })
 }, 10000)
+
+// save snapshot in mongodb
+setInterval(() => {
+    markets.map(market => {
+        readOrderbook(market, -1)
+            .then(orderbook => {
+                connection.then(db => {
+                    db.collection(market).insert(orderbook)
+                })
+            })
+    })
+}, snapshotInterval)
