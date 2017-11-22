@@ -543,6 +543,7 @@ markets.map(market => {
 })
 
 // print limited depth
+/*
 setInterval(() => {
     markets.map(market => {
         readOrderbook(market, 10)
@@ -551,6 +552,7 @@ setInterval(() => {
             })
     })
 }, 10000)
+*/
 
 // save snapshot in mongodb
 setInterval(() => {

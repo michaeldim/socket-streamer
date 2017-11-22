@@ -8,7 +8,7 @@ module.exports = {
     // First application
     {
       name      : 'socket-cc',
-      script    : 'lib/socket-streamer.js',
+      script    : 'lib/p-streamer.js',
       args      : '-i wss://streamer.cryptocompare.com',
       watch     : true,
       env: {
