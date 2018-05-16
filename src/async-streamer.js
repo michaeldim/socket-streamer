@@ -34,7 +34,7 @@ const ERROR_RECONNECT_INTERVAL = 600000 // 10 min
 const OP_QUEUE_LIMIT = 1024
 const TICK_DEPTH = 128
 
-const redisClient = Redis.createClient(redisUrl);
+const redisClient = Redis.createClient(commander.redisUrl);
 
 // generic helpers
 const printLog = msg => {
@@ -44,7 +44,7 @@ const printLog = msg => {
 };
 
 const getOrderbookKey = (market, name) => {
-    return redisPrefix + ':' + market + ':' + name;
+    return commander.redisPrefix + ':' + market + ':' + name;
 };
 
 // helper - read orderbook snapshot from poloniex
@@ -380,7 +380,7 @@ const opWrapper = (rawOp) => {
 };
 
 // main entry
-markets.map((market) => {
+commander.market.map((market) => {
         // open websocket for each market
         const ws = new WebSocket(WS_URL);
 
