@@ -154,8 +154,8 @@ const readSnapshot = async (market, limit) => {
         const asks = await readDepth(market, limit, true);
         const bids = await readDepth(market, limit, false);
 
-        const frozen = await client.getAsync(getOrderbookKey(market, 'frozen'));
-        const seq = await client.getAsync(getOrderbookKey(market, 'seq'));
+        const frozen = await redisClient.getAsync(getOrderbookKey(market, 'frozen'));
+        const seq = await redisClient.getAsync(getOrderbookKey(market, 'seq'));
 
         return {
             market,
