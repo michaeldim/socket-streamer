@@ -1,8 +1,8 @@
 {
   "name": "socket-streamer",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "stream socket.io data into redis channel",
-  "main": "lib/socket-streamer.js",
+  "main": "lib/async-streamer.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
