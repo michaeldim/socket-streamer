@@ -385,9 +385,9 @@ commander.market.map((market) => {
         const ws = new WebSocket(WS_URL);
 
         ws.on('open', () => {
-            printLog('WebSocket connected to ' + wsUrl);
+            printLog(`WebSocket connected to ${WS_URL}`);
             ws.send(JSON.stringify({command: 'subscribe', channel: market}));
-            printLog('Subscribing to ' + market);
+            printLog(`Subscribing to ${market}`);
         });
 
         ws.on('message', async (msg) => {
