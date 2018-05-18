@@ -16,13 +16,12 @@ pm2 start lib/async-streamer.js
 ```
   Usage: async-streamer [options]
 
-
   Options:
 
-    -V, --version                           output the version number
-    --redis-url <redisUrl>                  Redis URL
-    --redis-prefix <redisPrefix>            Redis key prefix
-    --trade-channel <tradeChannel>          Trade info Redis channel
-    --market <market>                       Market list
-    -h, --help                              output usage information
+    -V, --version                   output the version number
+    --redis-url <redisUrl>          Redis URL (default: redis://localhost:6379)
+    --redis-prefix <redisPrefix>    Redis key prefix (default: orderbook)
+    --trade-channel <tradeChannel>  Trade info Redis channel (default: poloniex_trade)
+    --market <market>               Market list (default: BTC_ZEC,BTC_ETH,ETH_ZEC)
+    -h, --help                      output usage information
 ```
