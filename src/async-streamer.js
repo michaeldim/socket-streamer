@@ -22,7 +22,6 @@ commander
     .option('--redis-url <redisUrl>', 'Redis URL', 'redis://localhost:6379')
     .option('--redis-prefix <redisPrefix>', 'Redis key prefix', 'orderbook')
     .option('--trade-channel <tradeChannel>', 'Trade info Redis channel', 'poloniex_trade')
-    .option('--snapshot-interval <snapshotInterval>', 'Snapshot interval in ms', 60000)
     .option('--market <market>', 'Market list', list, ['BTC_ZEC', 'BTC_ETH', 'ETH_ZEC'])
     .parse(process.argv);
 
